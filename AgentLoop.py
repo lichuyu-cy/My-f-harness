@@ -27,22 +27,34 @@ client = Anthropic(
 )
 MODEL = os.environ["MODEL_ID"]
 
+# s05 change: SYSTEM prompt adds planning guidance
 SHELL_NAME = "cmd" if os.name == "nt" else "bash"
-SYSTEM = f"You are a coding agent at {os.getcwd()}. Use {SHELL_NAME} to solve tasks. Act, don't explain."
+SYSTEM = (
+    f"You are a coding agent at {os.getcwd()}. "
+    "Before starting any multi-step task, use todo_write to plan your steps. "
+    "Update status as you go."
+)
 
 
-# ── The core pattern: a while loop that calls tools until the model stops ──
+# s05: nag reminder counter
+rounds_since_todo = 0
+
+
 def agent_loop(messages: list):
+    global rounds_since_todo
     while True:
+        # s05: nag reminder — inject if model hasn't updated todos for 3 rounds
+        if rounds_since_todo >= 3 and messages:
+            messages.append({"role": "user",
+                             "content": "<reminder>Update your todos.</reminder>"})
+            rounds_since_todo = 0
+
         response = client.messages.create(
             model=MODEL, system=SYSTEM, messages=messages,
             tools=TOOLS, max_tokens=8000,
         )
-
-        # Append assistant turn
         messages.append({"role": "assistant", "content": response.content})
 
-        # If the model didn't call a tool, we're done
         if response.stop_reason != "tool_use":
             force = trigger_hooks("Stop", messages)
             if force:
@@ -50,7 +62,7 @@ def agent_loop(messages: list):
                 continue
             return
 
-        # Execute each tool call, collect results
+        rounds_since_todo += 1
         results = []
         for block in response.content:
             if block.type != "tool_use":
@@ -67,9 +79,13 @@ def agent_loop(messages: list):
 
             trigger_hooks("PostToolUse", block, output)
 
-            results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
+            # s05: reset nag counter when todo_write is called
+            if block.name == "todo_write":
+                rounds_since_todo = 0
 
-        # Feed tool results back, loop continues
+            results.append({"type": "tool_result", "tool_use_id": block.id,
+                            "content": output})
+
         messages.append({"role": "user", "content": results})
 
 

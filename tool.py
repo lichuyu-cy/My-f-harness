@@ -1,9 +1,12 @@
+import ast
+import json
 import os
 import subprocess
 import glob as _glob
 from pathlib import Path
 
 WORKDIR = Path(os.getcwd())
+CURRENT_TODOS: list[dict] = []
 
 
 # ═══════════════════════════════════════════════════════════
@@ -71,6 +74,45 @@ def run_glob(pattern: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════
+#  NEW in s05: todo_write tool — plan only, no execution
+# ═══════════════════════════════════════════════════════════
+
+def _normalize_todos(todos):
+    if isinstance(todos, str):
+        try:
+            todos = json.loads(todos)
+        except json.JSONDecodeError:
+            try:
+                todos = ast.literal_eval(todos)
+            except (SyntaxError, ValueError):
+                return None, "Error: todos must be a list or JSON array string"
+    if not isinstance(todos, list):
+        return None, "Error: todos must be a list"
+    for i, t in enumerate(todos):
+        if not isinstance(t, dict):
+            return None, f"Error: todos[{i}] must be an object"
+        if "content" not in t or "status" not in t:
+            return None, f"Error: todos[{i}] missing 'content' or 'status'"
+        if t["status"] not in ("pending", "in_progress", "completed"):
+            return None, f"Error: todos[{i}] has invalid status '{t['status']}'"
+    return todos, None
+
+
+def run_todo_write(todos: list) -> str:
+    global CURRENT_TODOS
+    todos, error = _normalize_todos(todos)
+    if error:
+        return error
+    CURRENT_TODOS = todos
+    lines = ["\n\033[33m## Current Tasks\033[0m"]
+    for t in CURRENT_TODOS:
+        icon = {"pending": " ", "in_progress": "\033[36m▸\033[0m", "completed": "\033[32m✓\033[0m"}[t["status"]]
+        lines.append(f"  [{icon}] {t['content']}")
+    print("\n".join(lines))
+    return f"Updated {len(CURRENT_TODOS)} tasks"
+
+
+# ═══════════════════════════════════════════════════════════
 #  Tool Definitions & Dispatch
 # ═══════════════════════════════════════════════════════════
 
@@ -85,9 +127,12 @@ TOOLS = [
      "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
     {"name": "glob", "description": "Find files matching a glob pattern.",
      "input_schema": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}},
+    # s05: new tool
+    {"name": "todo_write", "description": "Create and manage a task list for your current coding session.",
+     "input_schema": {"type": "object", "properties": {"todos": {"type": "array", "items": {"type": "object", "properties": {"content": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}}, "required": ["content", "status"]}}}, "required": ["todos"]}},
 ]
 
 TOOL_HANDLERS = {
     "bash": run_bash, "read_file": run_read, "write_file": run_write,
-    "edit_file": run_edit, "glob": run_glob,
+    "edit_file": run_edit, "glob": run_glob, "todo_write": run_todo_write,
 }
