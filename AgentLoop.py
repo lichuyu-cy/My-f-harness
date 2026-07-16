@@ -54,14 +54,21 @@ def agent_loop(messages: list):
     global rounds_since_todo
     reactive_retries = 0  # 应急压缩重试次数
 
-    # s09：每轮用户输入时重新构建 SYSTEM（记忆索引可能已更新）
+    # ── 构建 SYSTEM + 加载记忆 ──
+    # 每轮用户输入时重新构建 SYSTEM，因为 extract_memories 可能在上一轮
+    # 更新了记忆索引，需要让最新的索引进入本轮 SYSTEM prompt
     system = build_system()
-    # s09：加载相关记忆，记录当前用户消息位置
+    # 从记忆库中选出与本轮对话相关的记忆（LLM 按名称+描述筛选）
     memories_content = load_memories(messages)
+    # 记录当前用户消息的位置，后续将记忆内容注入到这条消息前
+    # 仅当最后一条消息是普通文本时才注入（tool_result 消息不需要）
     memory_turn = len(messages) - 1 if messages and isinstance(messages[-1].get("content"), str) else None
 
     while True:
-        # s09：保存压缩前快照（用于准确的记忆提取）
+        # ── 保存压缩前快照 ──
+        # 提取记忆需要基于压缩前的完整消息内容，因为压缩（尤其是 L1 snipping
+        # 和 L4 compact_history）会丢弃中间消息，导致 extract_memories 看不到
+        # 完整对话，错过可提取的信息。快照是浅拷贝，不额外消耗内存
         pre_compress = [
             m if isinstance(m, dict) else {"role": m.get("role", ""), "content": str(m.get("content", ""))}
             for m in messages
@@ -82,7 +89,10 @@ def agent_loop(messages: list):
         # ── 调 LLM API ──────────────────────────────────
         # 把完整对话历史发给模型，模型决定回复文本或调用工具
         try:
-            # 构造请求消息：如果有关联记忆，注入到当前用户消息前
+            # ── 记忆注入到用户消息前 ──
+            # 将相关记忆内容以 <relevant_memories> 标签包裹，插入到当前用户
+            # 消息的文本前。注入到用户消息（而非 SYSTEM）是因为不同轮次
+            # 激活的记忆不同，注入 SYSTEM 会导致每轮重建 SYSTEM，成本更高
             request_messages = messages
             if memories_content and memory_turn is not None and memory_turn < len(messages):
                 request_messages = messages.copy()
@@ -111,8 +121,11 @@ def agent_loop(messages: list):
         # ── 检查是否停止 ──────────────────────────────
         # stop_reason 不是 tool_use，说明模型给出了最终回答
         if response.stop_reason != "tool_use":
-            # s09：从压缩前快照中提取新记忆（保证准确性）
+            # ── 从压缩前快照中提取新记忆 ──
+            # 模型给出最终回答后，分析本轮和之前消息中的用户偏好、项目事实等，
+            # 自动写入 .memory/ 目录。使用压缩前快照确保提取的完整性
             extract_memories(pre_compress)
+            # 定期合并重复/过时记忆（文件数 ≥ 10 时触发）
             consolidate_memories()
 
             force = trigger_hooks("Stop", messages)
