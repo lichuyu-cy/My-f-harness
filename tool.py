@@ -130,9 +130,16 @@ TOOLS = [
     # s05: new tool
     {"name": "todo_write", "description": "Create and manage a task list for your current coding session.",
      "input_schema": {"type": "object", "properties": {"todos": {"type": "array", "items": {"type": "object", "properties": {"content": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}}, "required": ["content", "status"]}}}, "required": ["todos"]}},
+    # s06: new tool
+    {"name": "task", "description": "Launch a subagent to handle a complex subtask. Returns only the final conclusion.",
+     "input_schema": {"type": "object", "properties": {"description": {"type": "string"}}, "required": ["description"]}},
 ]
 
 TOOL_HANDLERS = {
     "bash": run_bash, "read_file": run_read, "write_file": run_write,
     "edit_file": run_edit, "glob": run_glob, "todo_write": run_todo_write,
 }
+
+# s06: register task handler (lazy import avoids circular ref)
+from subagent import spawn_subagent
+TOOL_HANDLERS["task"] = spawn_subagent
