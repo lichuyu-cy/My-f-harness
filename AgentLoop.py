@@ -1,5 +1,4 @@
 
-
 import os
 
 try:
@@ -15,76 +14,100 @@ except ImportError:
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
-from tool import TOOLS, TOOL_HANDLERS
-from hook import trigger_hooks
-from subagent import init_subagent
-from skills import build_system
-from context import init_compact, compact_context, compact_history, estimate_size, CONTEXT_LIMIT, MAX_REACTIVE_RETRIES
+from tool import TOOLS, TOOL_HANDLERS          # 所有工具的 schema 和 handler
+from hook import trigger_hooks                 # 钩子触发：权限检查、日志、Stop 等
+from subagent import init_subagent             # 子 Agent 依赖注入
+from skills import build_system                # 构建含技能目录的 SYSTEM prompt
+from context import init_compact, compact_context, compact_history, MAX_REACTIVE_RETRIES
 
 load_dotenv(override=True)
 
+# ── API 客户端初始化 ──────────────────────────────
+# 创建 Anthropic 兼容接口的客户端，使用 .env 中的配置
 client = Anthropic(
     api_key=os.getenv("ANTHROPIC_API_KEY"),
     auth_token=os.getenv("ANTHROPIC_AUTH_TOKEN"),
     base_url=os.getenv("ANTHROPIC_BASE_URL"),
 )
 MODEL = os.environ["MODEL_ID"]
+
+# 将 client 和 MODEL 注入到子模块（避免循环导入）
 init_subagent(client, MODEL)
 init_compact(client, MODEL)
 
 SHELL_NAME = "cmd" if os.name == "nt" else "bash"
-SYSTEM = build_system()
+SYSTEM = build_system()  # 动态 SYSTEM：包含技能目录 + 规划引导
 
 
-
-# s05: nag reminder counter
+# ── Nag reminder 计数器 ──────────────────────────
+# 连续 3 轮未调用 todo_write 时，注入提醒
 rounds_since_todo = 0
 
 
+# ═══════════════════════════════════════════════════════════
+#  agent_loop — 核心循环
+#  工作流：压缩管线 → LLM 调用 → 工具执行 → 回传结果 → 继续
+# ═══════════════════════════════════════════════════════════
 def agent_loop(messages: list):
+    """主循环：不断调 LLM → 执行工具 → 回传结果，直到模型主动停止。"""
     global rounds_since_todo
-    reactive_retries = 0
+    reactive_retries = 0  # 应急压缩重试次数
+
     while True:
-        # s08: three preprocessors before LLM call (0 API, cheap first)
+        # ── 前置处理：上下文压缩（0 API，便宜的先跑） ──
+        # L3 大结果落盘 → L1 裁中间消息 → L2 旧结果占位 → 超阈值？→ L4 LLM 摘要
         messages[:] = compact_context(messages)
 
-        # s05: nag reminder — inject if model hasn't updated todos for 3 rounds
+        # ═══════════════════════════════════════════════════
+        #  Nag reminder：连续 3 轮没调 todo_write 就注入提醒
+        # ═══════════════════════════════════════════════════
         if rounds_since_todo >= 3 and messages:
             messages.append({"role": "user",
                              "content": "<reminder>Update your todos.</reminder>"})
             rounds_since_todo = 0
 
+        # ── 调 LLM API ──────────────────────────────────
+        # 把完整对话历史发给模型，模型决定回复文本或调用工具
         try:
             response = client.messages.create(
                 model=MODEL, system=SYSTEM, messages=messages,
                 tools=TOOLS, max_tokens=8000,
             )
-            reactive_retries = 0  # reset on success
+            reactive_retries = 0  # API 调用成功，重置应急计数器
         except Exception as e:
+            # 上下文超长 → 应急压缩后重试
             if ("prompt_too_long" in str(e).lower() or "too many tokens" in str(e).lower()) and reactive_retries < MAX_REACTIVE_RETRIES:
                 print("[reactive compact]")
                 from context import reactive_compact
                 messages[:] = reactive_compact(messages)
                 reactive_retries += 1
                 continue
-            raise
+            raise  # 非上下文错误，抛出去
 
+        # ── 记录模型回复 ──────────────────────────────
+        # 模型可能返回多个 block：text（最终回答）、tool_use（工具调用）
         messages.append({"role": "assistant", "content": response.content})
 
+        # ── 检查是否停止 ──────────────────────────────
+        # stop_reason 不是 tool_use，说明模型给出了最终回答
         if response.stop_reason != "tool_use":
             force = trigger_hooks("Stop", messages)
             if force:
+                # Stop 钩子返回了内容，注入后继续
                 messages.append({"role": "user", "content": force})
                 continue
             return
 
+        # ── 工具调用轮次计数器递增 ──────────────────────
         rounds_since_todo += 1
         results = []
+
+        # ── 遍历模型的每个工具调用并执行 ─────────────────
         for block in response.content:
             if block.type != "tool_use":
                 continue
 
-            # s08: compact tool triggers compact_history immediately
+            # compact 工具：不走 normal 分发，直接触发全量摘要
             if block.name == "compact":
                 messages[:] = compact_history(messages)
                 results.append({"type": "tool_result", "tool_use_id": block.id,
@@ -92,28 +115,31 @@ def agent_loop(messages: list):
                 messages.append({"role": "user", "content": results})
                 break
 
+            # 前置钩子：权限检查（deny list、破坏性命令确认等）
             blocked = trigger_hooks("PreToolUse", block)
             if blocked:
                 results.append({"type": "tool_result", "tool_use_id": block.id,
                                 "content": str(blocked)})
                 continue
 
+            # 从 TOOL_HANDLERS 查找对应的执行函数并调用
             handler = TOOL_HANDLERS.get(block.name)
             output = handler(**block.input) if handler else f"Unknown: {block.name}"
 
+            # 后置钩子：大输出警告等
             trigger_hooks("PostToolUse", block, output)
 
-            # s05: reset nag counter when todo_write is called
+            # todo_write 被调用时重置 nag 计数器
             if block.name == "todo_write":
                 rounds_since_todo = 0
 
             results.append({"type": "tool_result", "tool_use_id": block.id,
                             "content": output})
         else:
-            # normal path: no compact was called
+            # 正常路径：没有调用 compact，回传结果后继续循环
             messages.append({"role": "user", "content": results})
             continue
-        # compact was called: results already appended above, restart loop
+        # compact 路径：结果已追加，重启循环
         continue
 
 
@@ -122,7 +148,7 @@ if __name__ == "__main__":
     print("s01: Agent Loop")
     print("输入问题，回车发送。输入 q 退出。\n")
 
-    history = []
+    history = []  # 跨轮次对话历史
     while True:
         try:
             query = input("\033[36ms01 >> \033[0m")
@@ -130,10 +156,13 @@ if __name__ == "__main__":
             break
         if query.strip().lower() in ("q", "exit", ""):
             break
+
+        # 用户输入到达模型前的钩子：上下文注入
         trigger_hooks("UserPromptSubmit", query)
         history.append({"role": "user", "content": query})
         agent_loop(history)
-        # Print the model's final text response
+
+        # 打印模型最终文本回复
         response_content = history[-1]["content"]
         if isinstance(response_content, list):
             for block in response_content:
