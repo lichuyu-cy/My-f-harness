@@ -17,7 +17,8 @@ from dotenv import load_dotenv
 from tool import TOOLS, TOOL_HANDLERS          # 所有工具的 schema 和 handler
 from hook import trigger_hooks                 # 钩子触发：权限检查、日志、Stop 等
 from subagent import init_subagent             # 子 Agent 依赖注入
-from skills import build_system                # 构建含技能目录的 SYSTEM prompt
+from system import build_system                # 统一组装 SYSTEM（技能 + 记忆索引）
+from memory import init_memory, load_memories, extract_memories, consolidate_memories
 from context import init_compact, compact_context, compact_history, MAX_REACTIVE_RETRIES
 
 load_dotenv(override=True)
@@ -34,9 +35,9 @@ MODEL = os.environ["MODEL_ID"]
 # 将 client 和 MODEL 注入到子模块（避免循环导入）
 init_subagent(client, MODEL)
 init_compact(client, MODEL)
+init_memory(client, MODEL)
 
 SHELL_NAME = "cmd" if os.name == "nt" else "bash"
-SYSTEM = build_system()  # 动态 SYSTEM：包含技能目录 + 规划引导
 
 
 # ── Nag reminder 计数器 ──────────────────────────
@@ -53,8 +54,20 @@ def agent_loop(messages: list):
     global rounds_since_todo
     reactive_retries = 0  # 应急压缩重试次数
 
+    # s09：每轮用户输入时重新构建 SYSTEM（记忆索引可能已更新）
+    system = build_system()
+    # s09：加载相关记忆，记录当前用户消息位置
+    memories_content = load_memories(messages)
+    memory_turn = len(messages) - 1 if messages and isinstance(messages[-1].get("content"), str) else None
+
     while True:
-        # ── 前置处理：上下文压缩（0 API，便宜的先跑） ──
+        # s09：保存压缩前快照（用于准确的记忆提取）
+        pre_compress = [
+            m if isinstance(m, dict) else {"role": m.get("role", ""), "content": str(m.get("content", ""))}
+            for m in messages
+        ]
+
+        # ── 前置处理：上下文压缩（0 API，便宜的先跑）
         # L3 大结果落盘 → L1 裁中间消息 → L2 旧结果占位 → 超阈值？→ L4 LLM 摘要
         messages[:] = compact_context(messages)
 
@@ -69,8 +82,16 @@ def agent_loop(messages: list):
         # ── 调 LLM API ──────────────────────────────────
         # 把完整对话历史发给模型，模型决定回复文本或调用工具
         try:
+            # 构造请求消息：如果有关联记忆，注入到当前用户消息前
+            request_messages = messages
+            if memories_content and memory_turn is not None and memory_turn < len(messages):
+                request_messages = messages.copy()
+                request_messages[memory_turn] = {
+                    **messages[memory_turn],
+                    "content": memories_content + "\n\n" + messages[memory_turn]["content"],
+                }
             response = client.messages.create(
-                model=MODEL, system=SYSTEM, messages=messages,
+                model=MODEL, system=system, messages=request_messages,
                 tools=TOOLS, max_tokens=8000,
             )
             reactive_retries = 0  # API 调用成功，重置应急计数器
@@ -85,12 +106,15 @@ def agent_loop(messages: list):
             raise  # 非上下文错误，抛出去
 
         # ── 记录模型回复 ──────────────────────────────
-        # 模型可能返回多个 block：text（最终回答）、tool_use（工具调用）
         messages.append({"role": "assistant", "content": response.content})
 
         # ── 检查是否停止 ──────────────────────────────
         # stop_reason 不是 tool_use，说明模型给出了最终回答
         if response.stop_reason != "tool_use":
+            # s09：从压缩前快照中提取新记忆（保证准确性）
+            extract_memories(pre_compress)
+            consolidate_memories()
+
             force = trigger_hooks("Stop", messages)
             if force:
                 # Stop 钩子返回了内容，注入后继续
