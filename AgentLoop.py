@@ -15,7 +15,8 @@ except ImportError:
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
-from tool import TOOLS, execute_tool
+from tool import TOOLS, TOOL_HANDLERS
+from hook import trigger_hooks
 
 load_dotenv(override=True)
 
@@ -43,13 +44,30 @@ def agent_loop(messages: list):
 
         # If the model didn't call a tool, we're done
         if response.stop_reason != "tool_use":
+            force = trigger_hooks("Stop", messages)
+            if force:
+                messages.append({"role": "user", "content": force})
+                continue
             return
 
         # Execute each tool call, collect results
         results = []
         for block in response.content:
-            if block.type == "tool_use":
-                results.append(execute_tool(block))
+            if block.type != "tool_use":
+                continue
+
+            blocked = trigger_hooks("PreToolUse", block)
+            if blocked:
+                results.append({"type": "tool_result", "tool_use_id": block.id,
+                                "content": str(blocked)})
+                continue
+
+            handler = TOOL_HANDLERS.get(block.name)
+            output = handler(**block.input) if handler else f"Unknown: {block.name}"
+
+            trigger_hooks("PostToolUse", block, output)
+
+            results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
 
         # Feed tool results back, loop continues
         messages.append({"role": "user", "content": results})
@@ -68,6 +86,7 @@ if __name__ == "__main__":
             break
         if query.strip().lower() in ("q", "exit", ""):
             break
+        trigger_hooks("UserPromptSubmit", query)
         history.append({"role": "user", "content": query})
         agent_loop(history)
         # Print the model's final text response
