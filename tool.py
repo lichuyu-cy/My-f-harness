@@ -133,6 +133,9 @@ TOOLS = [
     # s06: new tool
     {"name": "task", "description": "Launch a subagent to handle a complex subtask. Returns only the final conclusion.",
      "input_schema": {"type": "object", "properties": {"description": {"type": "string"}}, "required": ["description"]}},
+    # s07: new tool
+    {"name": "load_skill", "description": "Load the full content of a skill by name.",
+     "input_schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
 ]
 
 TOOL_HANDLERS = {
@@ -143,3 +146,6 @@ TOOL_HANDLERS = {
 # s06: register task handler (lazy import avoids circular ref)
 from subagent import spawn_subagent
 TOOL_HANDLERS["task"] = spawn_subagent
+# s07: register load_skill handler
+from skills import load_skill
+TOOL_HANDLERS["load_skill"] = load_skill

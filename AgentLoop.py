@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from tool import TOOLS, TOOL_HANDLERS
 from hook import trigger_hooks
 from subagent import init_subagent
+from skills import build_system
 
 load_dotenv(override=True)
 
@@ -30,12 +31,7 @@ MODEL = os.environ["MODEL_ID"]
 init_subagent(client, MODEL)
 
 SHELL_NAME = "cmd" if os.name == "nt" else "bash"
-SYSTEM = (
-    f"You are a coding agent at {os.getcwd()}. "
-    "Before starting any multi-step task, use todo_write to plan your steps. "
-    "Update status as you go. "
-    "For complex sub-problems, use the task tool to spawn a subagent."
-)
+SYSTEM = build_system()
 
 
 
