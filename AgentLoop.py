@@ -19,6 +19,7 @@ from tool import TOOLS, TOOL_HANDLERS
 from hook import trigger_hooks
 from subagent import init_subagent
 from skills import build_system
+from context import init_compact, compact_context, compact_history, estimate_size, CONTEXT_LIMIT, MAX_REACTIVE_RETRIES
 
 load_dotenv(override=True)
 
@@ -29,6 +30,7 @@ client = Anthropic(
 )
 MODEL = os.environ["MODEL_ID"]
 init_subagent(client, MODEL)
+init_compact(client, MODEL)
 
 SHELL_NAME = "cmd" if os.name == "nt" else "bash"
 SYSTEM = build_system()
@@ -41,17 +43,32 @@ rounds_since_todo = 0
 
 def agent_loop(messages: list):
     global rounds_since_todo
+    reactive_retries = 0
     while True:
+        # s08: three preprocessors before LLM call (0 API, cheap first)
+        messages[:] = compact_context(messages)
+
         # s05: nag reminder — inject if model hasn't updated todos for 3 rounds
         if rounds_since_todo >= 3 and messages:
             messages.append({"role": "user",
                              "content": "<reminder>Update your todos.</reminder>"})
             rounds_since_todo = 0
 
-        response = client.messages.create(
-            model=MODEL, system=SYSTEM, messages=messages,
-            tools=TOOLS, max_tokens=8000,
-        )
+        try:
+            response = client.messages.create(
+                model=MODEL, system=SYSTEM, messages=messages,
+                tools=TOOLS, max_tokens=8000,
+            )
+            reactive_retries = 0  # reset on success
+        except Exception as e:
+            if ("prompt_too_long" in str(e).lower() or "too many tokens" in str(e).lower()) and reactive_retries < MAX_REACTIVE_RETRIES:
+                print("[reactive compact]")
+                from context import reactive_compact
+                messages[:] = reactive_compact(messages)
+                reactive_retries += 1
+                continue
+            raise
+
         messages.append({"role": "assistant", "content": response.content})
 
         if response.stop_reason != "tool_use":
@@ -66,6 +83,14 @@ def agent_loop(messages: list):
         for block in response.content:
             if block.type != "tool_use":
                 continue
+
+            # s08: compact tool triggers compact_history immediately
+            if block.name == "compact":
+                messages[:] = compact_history(messages)
+                results.append({"type": "tool_result", "tool_use_id": block.id,
+                                "content": "[Compacted. Conversation history has been summarized.]"})
+                messages.append({"role": "user", "content": results})
+                break
 
             blocked = trigger_hooks("PreToolUse", block)
             if blocked:
@@ -84,8 +109,12 @@ def agent_loop(messages: list):
 
             results.append({"type": "tool_result", "tool_use_id": block.id,
                             "content": output})
-
-        messages.append({"role": "user", "content": results})
+        else:
+            # normal path: no compact was called
+            messages.append({"role": "user", "content": results})
+            continue
+        # compact was called: results already appended above, restart loop
+        continue
 
 
 # ── Entry point ──────────────────────────────────────────

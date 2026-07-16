@@ -137,6 +137,9 @@ TOOLS = [
     # s07: new tool
     {"name": "load_skill", "description": "Load the full content of a skill by name.",
      "input_schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
+    # s08: new tool
+    {"name": "compact", "description": "Summarize earlier conversation to free context space.",
+     "input_schema": {"type": "object", "properties": {"focus": {"type": "string"}}}},
 ]
 
 TOOL_HANDLERS = {
