@@ -23,8 +23,9 @@ def safe_path(p: str) -> Path:
 def run_bash(command: str) -> str:
     try:
         r = subprocess.run(command, shell=True, cwd=WORKDIR,
-                           capture_output=True, text=True, timeout=120)
-        out = (r.stdout + r.stderr).strip()
+                           capture_output=True, timeout=120)
+        out = ((r.stdout or b"").decode("utf-8", errors="replace")
+               + (r.stderr or b"").decode("utf-8", errors="replace")).strip()
         return out[:50000] if out else "(no output)"
     except subprocess.TimeoutExpired:
         return "Error: Timeout (120s)"
