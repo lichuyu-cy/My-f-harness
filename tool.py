@@ -35,6 +35,12 @@ def safe_path(p: str) -> Path:
     return path
 
 
+def execute_tool(block):
+    """通用工具执行器：从 TOOL_HANDLERS 找 handler 并调用。"""
+    handler = TOOL_HANDLERS.get(block.name)
+    return handler(**block.input) if handler else f"Unknown: {block.name}"
+
+
 def run_bash(command: str) -> str:
     """执行 shell 命令，返回 stdout + stderr（最多 50000 字符）。"""
     try:
@@ -145,7 +151,10 @@ def run_todo_write(todos: list) -> str:
 TOOLS = [
     # bash：执行任意 shell 命令
     {"name": "bash", "description": "Run a shell command.",
-     "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
+     "input_schema": {"type": "object", "properties": {
+         "command": {"type": "string"},
+         "run_in_background": {"type": "boolean"}},
+      "required": ["command"]}},
     # read_file：读取文件，可选行数限制
     {"name": "read_file", "description": "Read file contents.",
      "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["path"]}},

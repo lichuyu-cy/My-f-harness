@@ -14,7 +14,7 @@ except ImportError:
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
-from tool import TOOLS, TOOL_HANDLERS          # 所有工具的 schema 和 handler
+from tool import TOOLS, TOOL_HANDLERS, execute_tool   # 所有工具的 schema、handler 和通用执行器
 from hook import trigger_hooks                 # 钩子触发：权限检查、日志、Stop 等
 from subagent import init_subagent             # 子 Agent 依赖注入
 from system import get_system_prompt, update_context     # s10 风格：分段定义 + 按需拼接 + 缓存
@@ -23,6 +23,8 @@ from context import init_compact, compact_context, compact_history
 from error_handling import (RecoveryState, with_retry, is_prompt_too_long_error,
                       reactive_compact, ESCALATED_MAX_TOKENS, DEFAULT_MAX_TOKENS,
                       MAX_RECOVERY_RETRIES, CONTINUATION_PROMPT)
+from background_task import (should_run_background, start_background_task,
+                              collect_background_results)
 
 load_dotenv(override=True)
 
@@ -196,6 +198,15 @@ def agent_loop(messages: list):
                 system = get_system_prompt(context)
                 break
 
+            # s13：检查是否应后台执行（慢操作放 daemon 线程）
+            if should_run_background(block.name, block.input):
+                bg_id = start_background_task(block, execute_tool)
+                results.append({"type": "tool_result", "tool_use_id": block.id,
+                                "content": f"[Background task {bg_id} started] "
+                                           f"Command: {block.input.get('command', '')}. "
+                                           f"Result will be available when complete."})
+                continue
+
             # 前置钩子：权限检查（deny list、破坏性命令确认等）
             blocked = trigger_hooks("PreToolUse", block)
             if blocked:
@@ -203,9 +214,8 @@ def agent_loop(messages: list):
                                 "content": str(blocked)})
                 continue
 
-            # 从 TOOL_HANDLERS 查找对应的执行函数并调用
-            handler = TOOL_HANDLERS.get(block.name)
-            output = handler(**block.input) if handler else f"Unknown: {block.name}"
+            # 同步执行工具
+            output = execute_tool(block)
 
             # 后置钩子：大输出警告等
             trigger_hooks("PostToolUse", block, output)
@@ -218,7 +228,13 @@ def agent_loop(messages: list):
                             "content": output})
         else:
             # 正常路径：没有调用 compact，回传结果后继续循环
-            messages.append({"role": "user", "content": results})
+            # s13：收集后台通知，合并到 tool_result 后一起注入
+            user_content = list(results)
+            bg_notifications = collect_background_results()
+            if bg_notifications:
+                for notif in bg_notifications:
+                    user_content.append({"type": "text", "text": notif})
+            messages.append({"role": "user", "content": user_content})
             # s10：每轮工具执行后重新评估 context，system prompt 随真实状态更新
             context = update_context()
             system = get_system_prompt(context)
