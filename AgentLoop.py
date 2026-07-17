@@ -25,6 +25,7 @@ from error_handling import (RecoveryState, with_retry, is_prompt_too_long_error,
                       MAX_RECOVERY_RETRIES, CONTINUATION_PROMPT)
 from background_task import (should_run_background, start_background_task,
                               collect_background_results)
+from team import BUS
 
 load_dotenv(override=True)
 
@@ -268,4 +269,13 @@ if __name__ == "__main__":
             for block in response_content:
                 if getattr(block, "type", None) == "text":
                     print(block.text)
+
+        # s15：每轮结束后检查 Lead 收件箱，队友消息注入 history
+        inbox = BUS.read_inbox("lead")
+        if inbox:
+            inbox_text = "\n".join(
+                f"From {m['from']}: {m['content'][:200]}" for m in inbox)
+            history.append({"role": "user",
+                            "content": f"[Inbox]\n{inbox_text}"})
+            print(f"\n  \033[33m[Inbox: {len(inbox)} messages injected]\033[0m")
         print()

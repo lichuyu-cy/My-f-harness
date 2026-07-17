@@ -208,6 +208,25 @@ TOOLS = [
      "input_schema": {"type": "object",
                       "properties": {"task_id": {"type": "string"}},
                       "required": ["task_id"]}},
+    # ── 团队工具（s15） ──
+    {"name": "spawn_teammate",
+     "description": "Spawn a teammate agent in a background thread.",
+     "input_schema": {"type": "object",
+                      "properties": {
+                          "name": {"type": "string"},
+                          "role": {"type": "string"},
+                          "prompt": {"type": "string"}},
+                      "required": ["name", "role", "prompt"]}},
+    {"name": "send_message",
+     "description": "Send a message to a teammate via MessageBus.",
+     "input_schema": {"type": "object",
+                      "properties": {"to": {"type": "string"},
+                                     "content": {"type": "string"}},
+                      "required": ["to", "content"]}},
+    {"name": "check_inbox",
+     "description": "Check Lead's inbox for teammate messages.",
+     "input_schema": {"type": "object", "properties": {},
+                      "required": []}},
 ]
 
 # 工具名 → 执行函数的映射，AgentLoop 据此分发
@@ -237,3 +256,9 @@ TOOL_HANDLERS["list_tasks"] = run_list_tasks
 TOOL_HANDLERS["get_task"] = run_get_task
 TOOL_HANDLERS["claim_task"] = run_claim_task
 TOOL_HANDLERS["complete_task"] = run_complete_task
+
+# ── s15 团队工具 ──
+from team import run_spawn_teammate, run_send_message, run_check_inbox
+TOOL_HANDLERS["spawn_teammate"] = run_spawn_teammate
+TOOL_HANDLERS["send_message"] = run_send_message
+TOOL_HANDLERS["check_inbox"] = run_check_inbox

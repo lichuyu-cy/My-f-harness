@@ -32,6 +32,12 @@ PROMPT_SECTIONS = {
         "persistent tasks with blockedBy dependencies. "
         "Break large goals into dependent tasks via blockedBy."
     ),
+    # 团队协作指引（s15）
+    "team_hint": (
+        "Use spawn_teammate to create teammate agents for parallel work. "
+        "Use send_message/check_inbox to communicate with teammates. "
+        "Teammates run in background and report results via inbox."
+    ),
     # 记忆占位（按需加载）
     "memory_header": "Relevant memories are injected below when available. "
                      "Respect user preferences from memory.",
@@ -61,7 +67,7 @@ def update_context() -> dict:
 def assemble_system_prompt(context: dict) -> str:
     """根据 context 的真实状态选择 section 并拼接为 SYSTEM prompt。
 
-    - 始终加载的：identity、skills_hint、planning、task_hint、task_system
+    - 始终加载的：identity、skills_hint、planning、task_hint、task_system、team_hint
     - 按需加载的：技能目录（有技能时才加）、记忆索引（有文件时才加）
     """
     sections = []
@@ -85,6 +91,7 @@ def assemble_system_prompt(context: dict) -> str:
     sections.append(PROMPT_SECTIONS["planning"])
     sections.append(PROMPT_SECTIONS["task_hint"])
     sections.append(PROMPT_SECTIONS["task_system"])
+    sections.append(PROMPT_SECTIONS["team_hint"])
 
     return "\n".join(sections)
 
