@@ -26,6 +26,12 @@ PROMPT_SECTIONS = {
         "Update status as you go."
     ),
     "task_hint": "For complex sub-problems, use the task tool to spawn a subagent.",
+    # 任务系统指引（s12）
+    "task_system": (
+        "Use create_task/list_tasks/get_task/claim_task/complete_task to manage "
+        "persistent tasks with blockedBy dependencies. "
+        "Break large goals into dependent tasks via blockedBy."
+    ),
     # 记忆占位（按需加载）
     "memory_header": "Relevant memories are injected below when available. "
                      "Respect user preferences from memory.",
@@ -55,7 +61,7 @@ def update_context() -> dict:
 def assemble_system_prompt(context: dict) -> str:
     """根据 context 的真实状态选择 section 并拼接为 SYSTEM prompt。
 
-    - 始终加载的：identity、skills_hint、planning、task_hint
+    - 始终加载的：identity、skills_hint、planning、task_hint、task_system
     - 按需加载的：技能目录（有技能时才加）、记忆索引（有文件时才加）
     """
     sections = []
@@ -78,6 +84,7 @@ def assemble_system_prompt(context: dict) -> str:
     # 始终加载 — 规划引导
     sections.append(PROMPT_SECTIONS["planning"])
     sections.append(PROMPT_SECTIONS["task_hint"])
+    sections.append(PROMPT_SECTIONS["task_system"])
 
     return "\n".join(sections)
 

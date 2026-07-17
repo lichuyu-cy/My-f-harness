@@ -170,6 +170,35 @@ TOOLS = [
     # compact：主动触发上下文压缩
     {"name": "compact", "description": "Summarize earlier conversation to free context space.",
      "input_schema": {"type": "object", "properties": {"focus": {"type": "string"}}}},
+    # ── 任务系统工具（s12） ──
+    {"name": "create_task",
+     "description": "Create a new task with optional blockedBy dependencies. Tasks persist across sessions.",
+     "input_schema": {"type": "object",
+                      "properties": {
+                          "subject": {"type": "string"},
+                          "description": {"type": "string"},
+                          "blockedBy": {"type": "array",
+                                        "items": {"type": "string"}}},
+                      "required": ["subject"]}},
+    {"name": "list_tasks",
+     "description": "List all tasks with status, owner, and dependencies.",
+     "input_schema": {"type": "object", "properties": {},
+                      "required": []}},
+    {"name": "get_task",
+     "description": "Get full details of a specific task by ID.",
+     "input_schema": {"type": "object",
+                      "properties": {"task_id": {"type": "string"}},
+                      "required": ["task_id"]}},
+    {"name": "claim_task",
+     "description": "Claim a pending task. Sets owner, changes status to in_progress.",
+     "input_schema": {"type": "object",
+                      "properties": {"task_id": {"type": "string"}},
+                      "required": ["task_id"]}},
+    {"name": "complete_task",
+     "description": "Complete an in-progress task. Reports unblocked downstream tasks.",
+     "input_schema": {"type": "object",
+                      "properties": {"task_id": {"type": "string"}},
+                      "required": ["task_id"]}},
 ]
 
 # 工具名 → 执行函数的映射，AgentLoop 据此分发
@@ -191,3 +220,11 @@ TOOL_HANDLERS["load_skill"] = load_skill
 
 # compact 工具：handler 不由 TOOL_HANDLERS 注册，
 # 由 AgentLoop 在 agent_loop 中直接拦截处理
+
+# ── s12 任务系统工具 ──
+from task import run_create_task, run_list_tasks, run_get_task, run_claim_task, run_complete_task
+TOOL_HANDLERS["create_task"] = run_create_task
+TOOL_HANDLERS["list_tasks"] = run_list_tasks
+TOOL_HANDLERS["get_task"] = run_get_task
+TOOL_HANDLERS["claim_task"] = run_claim_task
+TOOL_HANDLERS["complete_task"] = run_complete_task
