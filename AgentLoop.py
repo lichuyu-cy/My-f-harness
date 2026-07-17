@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 from tool import TOOLS, TOOL_HANDLERS          # 所有工具的 schema 和 handler
 from hook import trigger_hooks                 # 钩子触发：权限检查、日志、Stop 等
 from subagent import init_subagent             # 子 Agent 依赖注入
-from system import build_system                # 统一组装 SYSTEM（技能 + 记忆索引）
+from system import get_system_prompt, update_context     # s10 风格：分段定义 + 按需拼接 + 缓存
 from memory import init_memory, load_memories, extract_memories, consolidate_memories
 from context import init_compact, compact_context, compact_history, MAX_REACTIVE_RETRIES
 
@@ -57,7 +57,8 @@ def agent_loop(messages: list):
     # ── 构建 SYSTEM + 加载记忆 ──
     # 每轮用户输入时重新构建 SYSTEM，因为 extract_memories 可能在上一轮
     # 更新了记忆索引，需要让最新的索引进入本轮 SYSTEM prompt
-    system = build_system()
+    context = update_context()
+    system = get_system_prompt(context)
     # 从记忆库中选出与本轮对话相关的记忆（LLM 按名称+描述筛选）
     memories_content = load_memories(messages)
     # 记录当前用户消息的位置，后续将记忆内容注入到这条消息前
@@ -150,6 +151,9 @@ def agent_loop(messages: list):
                 results.append({"type": "tool_result", "tool_use_id": block.id,
                                 "content": "[Compacted. Conversation history has been summarized.]"})
                 messages.append({"role": "user", "content": results})
+                # s10：compact 也会改变上下文状态，重新评估
+                context = update_context()
+                system = get_system_prompt(context)
                 break
 
             # 前置钩子：权限检查（deny list、破坏性命令确认等）
@@ -175,6 +179,9 @@ def agent_loop(messages: list):
         else:
             # 正常路径：没有调用 compact，回传结果后继续循环
             messages.append({"role": "user", "content": results})
+            # s10：每轮工具执行后重新评估 context，system prompt 随真实状态更新
+            context = update_context()
+            system = get_system_prompt(context)
             continue
         # compact 路径：结果已追加，重启循环
         continue
